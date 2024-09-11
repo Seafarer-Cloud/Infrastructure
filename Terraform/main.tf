@@ -48,7 +48,7 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  name   = "ex-${basename(path.cwd)}"
+  name   = "applications"
   region = "eu-west-3" # Updated region
 
   vpc_cidr = "10.0.0.0/16"
