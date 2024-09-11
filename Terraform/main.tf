@@ -1,8 +1,8 @@
 provider "aws" {
-  region = local.region
+  region = "eu-west-3"
 }
 
-# This provider is required for ECR to autheticate with public repos. Please note ECR authetication requires us-east-1 as region hence its hardcoded below.
+# This provider is required for ECR to authenticate with public repos. Please note ECR authentication requires us-east-1 as region hence its hardcoded below.
 # If your region is same as us-east-1 then you can just use one aws provider
 provider "aws" {
   alias  = "ecr"
@@ -49,7 +49,7 @@ data "aws_availability_zones" "available" {
 
 locals {
   name   = "ex-${basename(path.cwd)}"
-  region = "us-west-2"
+  region = "eu-west-3" # Updated region
 
   vpc_cidr = "10.0.0.0/16"
   azs      = slice(data.aws_availability_zones.available.names, 0, 3)
