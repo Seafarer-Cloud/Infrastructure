@@ -69,7 +69,7 @@ module "eks" {
   version = "~> 20.11"
 
   cluster_name                   = local.name
-  cluster_version                = "1.30"
+  cluster_version                = "1.29"
   cluster_endpoint_public_access = true
 
   vpc_id     = module.vpc.vpc_id
@@ -159,6 +159,7 @@ module "eks_blueprints_addons" {
   karpenter_node = {
     # Use static name so that it matches what is defined in `karpenter.yaml` example manifest
     iam_role_use_name_prefix = false
+    iam_role_name            = "karpenterrole"
   }
 
   tags = local.tags
@@ -168,7 +169,7 @@ resource "aws_eks_access_entry" "karpenter_node_access_entry" {
   cluster_name      = module.eks.cluster_name
   principal_arn     = module.eks_blueprints_addons.karpenter.node_iam_role_arn
   kubernetes_groups = []
-  type              = "EC2_LINUX"
+  type              = "STANDARD"
 }
 
 ################################################################################
