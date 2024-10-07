@@ -6,7 +6,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
       name: karpenter
     spec:
       amiFamily: AL2
-      role : "${module.eks_blueprints_addons.karpenter.node_iam_role_arn}"
+      role: "${basename(module.eks_blueprints_addons.karpenter.node_iam_role_arn)}"
       subnetSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${module.eks.cluster_name}
@@ -22,6 +22,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
   depends_on = [
     module.eks,
     aws_eks_access_entry.karpenter_node_access_entry,
+    aws_security_group.karpenter_node_sg,
   ]
 }
 

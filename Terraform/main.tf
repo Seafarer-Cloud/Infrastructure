@@ -160,9 +160,39 @@ module "eks_blueprints_addons" {
     # Use static name so that it matches what is defined in `karpenter.yaml` example manifest
     iam_role_use_name_prefix = false
     iam_role_name            = "karpenterrole"
+
+    attach_policy_arns = [
+      aws_iam_policy.karpenter_create_service_linked_role_policy.arn
+    ]
   }
 
   tags = local.tags
+}
+
+resource "aws_iam_policy" "karpenter_create_service_linked_role_policy" {
+  name        = "KarpenterCreateServiceLinkedRolePolicy"
+  description = "Allows creation of service-linked roles for EC2 Spot Instances"
+  policy      = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCreateServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "spot.amazonaws.com",
+            "ec2.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
+EOF
 }
 
 resource "aws_eks_access_entry" "karpenter_node_access_entry" {
@@ -201,4 +231,36 @@ module "vpc" {
   }
 
   tags = local.tags
+}
+
+resource "aws_security_group" "karpenter_node_sg" {
+  name        = "${local.name}-karpenter-node-sg"
+  description = "Security group for Karpenter nodes"
+  vpc_id      = module.vpc.vpc_id
+
+  tags = merge(local.tags, {
+    "karpenter.sh/discovery" = local.name
+  })
+}
+
+resource "aws_security_group_rule" "allow_node_to_control_plane" {
+  type              = "egress"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  security_group_id = aws_security_group.karpenter_node_sg.id
+  cidr_blocks       = ["0.0.0.0/0"]
+
+  description = "Allow nodes to communicate with the Kubernetes API server"
+}
+
+resource "aws_security_group_rule" "allow_all_egress" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  security_group_id = aws_security_group.karpenter_node_sg.id
+  cidr_blocks       = ["0.0.0.0/0"]
+
+  description = "Allow all outbound traffic"
 }
