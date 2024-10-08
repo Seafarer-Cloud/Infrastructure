@@ -1,43 +1,5 @@
-provider "aws" {
-  region = "eu-west-3"
-}
-
 # This provider is required for ECR to authenticate with public repos. Please note ECR authentication requires us-east-1 as region hence its hardcoded below.
 # If your region is same as us-east-1 then you can just use one aws provider
-provider "aws" {
-  alias  = "ecr"
-  region = "us-east-1"
-}
-
-provider "kubernetes" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    # This requires the awscli to be installed locally where Terraform is executed
-    args = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
-  }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      # This requires the awscli to be installed locally where Terraform is executed
-      args = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
-    }
-  }
-}
-
-data "aws_ecrpublic_authorization_token" "token" {
-  provider = aws.ecr
-}
 
 data "aws_availability_zones" "available" {
   # Do not include local zones
@@ -75,9 +37,46 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  # Fargate profiles use the cluster primary security group so these are not utilized
-  create_cluster_security_group = false
-  create_node_security_group    = false
+  create_cluster_security_group = true
+  create_node_security_group    = true
+
+  cluster_security_group_additional_rules = {
+    ingress_nodes_ephemeral_ports_tcp = {
+      description                = "Nodes on ephemeral ports"
+      protocol                   = "tcp"
+      from_port                  = 1025
+      to_port                    = 65535
+      type                       = "ingress"
+      source_node_security_group = true
+    }
+    ingress_source_security_group_id = {
+      description              = "Ingress from another computed security group"
+      protocol                 = "tcp"
+      from_port                = 22
+      to_port                  = 22
+      type                     = "ingress"
+      source_security_group_id = aws_security_group.karpenter_node_sg.id
+    }
+  }
+
+  node_security_group_additional_rules = {
+    ingress_self_all = {
+      description = "Node to node all ports/protocols"
+      protocol    = "-1"
+      from_port   = 0
+      to_port     = 0
+      type        = "ingress"
+      self        = true
+    }
+    ingress_source_security_group_id = {
+      description              = "Ingress from another computed security group"
+      protocol                 = "tcp"
+      from_port                = 22
+      to_port                  = 22
+      type                     = "ingress"
+      source_security_group_id = aws_security_group.karpenter_node_sg.id
+    }
+  }
 
   enable_cluster_creator_admin_permissions = true
 
@@ -96,9 +95,6 @@ module "eks" {
   }
 
   tags = merge(local.tags, {
-    # NOTE - if creating multiple security groups with this module, only tag the
-    # security group that Karpenter should utilize with the following tag
-    # (i.e. - at most, only one security group should have this tag in your account)
     "karpenter.sh/discovery" = local.name
   })
 }
@@ -149,57 +145,9 @@ module "eks_blueprints_addons" {
     kube-proxy = {}
   }
 
-  enable_karpenter = true
-
-  karpenter = {
-    repository_username = data.aws_ecrpublic_authorization_token.token.user_name
-    repository_password = data.aws_ecrpublic_authorization_token.token.password
-  }
-
-  karpenter_node = {
-    # Use static name so that it matches what is defined in `karpenter.yaml` example manifest
-    iam_role_use_name_prefix = false
-    iam_role_name            = "karpenterrole"
-
-    attach_policy_arns = [
-      aws_iam_policy.karpenter_create_service_linked_role_policy.arn
-    ]
-  }
+  enable_karpenter = false
 
   tags = local.tags
-}
-
-resource "aws_iam_policy" "karpenter_create_service_linked_role_policy" {
-  name        = "KarpenterCreateServiceLinkedRolePolicy"
-  description = "Allows creation of service-linked roles for EC2 Spot Instances"
-  policy      = <<EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowCreateServiceLinkedRole",
-      "Effect": "Allow",
-      "Action": "iam:CreateServiceLinkedRole",
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "iam:AWSServiceName": [
-            "spot.amazonaws.com",
-            "ec2.amazonaws.com"
-          ]
-        }
-      }
-    }
-  ]
-}
-EOF
-}
-
-resource "aws_eks_access_entry" "karpenter_node_access_entry" {
-  cluster_name      = module.eks.cluster_name
-  principal_arn     = module.eks_blueprints_addons.karpenter.node_iam_role_arn
-  kubernetes_groups = []
-  type              = "STANDARD"
 }
 
 ################################################################################
@@ -208,29 +156,28 @@ resource "aws_eks_access_entry" "karpenter_node_access_entry" {
 
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.0"
+  version = "5.1.2"
 
   name = local.name
   cidr = local.vpc_cidr
 
-  azs             = local.azs
-  private_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 4, k)]
-  public_subnets  = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 48)]
-
-  enable_nat_gateway = true
-  single_nat_gateway = true
+  azs                  = local.azs
+  private_subnets      = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k)]
+  public_subnets       = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 4)]
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
 
   public_subnet_tags = {
-    "kubernetes.io/role/elb" = 1
+    "kubernetes.io/role/elb"              = "1"
+    "kubernetes.io/cluster/${local.name}" = null
   }
 
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = 1
-    # Tags subnets for Karpenter auto-discovery
-    "karpenter.sh/discovery" = local.name
+    "karpenter.sh/discovery"              = local.name
+    "kubernetes.io/cluster/${local.name}" = null
   }
-
-  tags = local.tags
 }
 
 resource "aws_security_group" "karpenter_node_sg" {
@@ -243,15 +190,34 @@ resource "aws_security_group" "karpenter_node_sg" {
   })
 }
 
-resource "aws_security_group_rule" "allow_node_to_control_plane" {
-  type              = "egress"
-  from_port         = 443
-  to_port           = 443
+resource "aws_security_group_rule" "allow_ssh_access" {
+  type              = "ingress"
+  from_port         = 22
+  to_port           = 22
   protocol          = "tcp"
   security_group_id = aws_security_group.karpenter_node_sg.id
-  cidr_blocks       = ["0.0.0.0/0"]
+  cidr_blocks       = ["0.0.0.0/0"] # Remplacez par votre IP ou plage d'IP pour plus de sécurité
+  description       = "Allow SSH access from anywhere"
+}
 
-  description = "Allow nodes to communicate with the Kubernetes API server"
+resource "aws_security_group_rule" "allow_control_plane_to_node" {
+  type                     = "ingress"
+  from_port                = 1025
+  to_port                  = 65535
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.karpenter_node_sg.id
+  source_security_group_id = module.eks.cluster_security_group_id
+  description              = "Allow incoming traffic from the EKS control plane"
+}
+
+resource "aws_security_group_rule" "allow_node_to_node_communication" {
+  type                     = "ingress"
+  from_port                = 0
+  to_port                  = 0
+  protocol                 = "-1"
+  security_group_id        = aws_security_group.karpenter_node_sg.id
+  source_security_group_id = aws_security_group.karpenter_node_sg.id
+  description              = "Allow node to node communication"
 }
 
 resource "aws_security_group_rule" "allow_all_egress" {
