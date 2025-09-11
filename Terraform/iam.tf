@@ -1,4 +1,4 @@
-# Définir le rôle IAM pour les nœuds Karpenter
+# Karpenter Node IAM Role
 resource "aws_iam_role" "karpenter_node_role" {
   name = "KarpenterNodeRole-${local.name}"
 
@@ -16,7 +16,7 @@ resource "aws_iam_role" "karpenter_node_role" {
   })
 }
 
-# Attacher les politiques IAM nécessaires
+# Attach policies to the Karpenter Node IAM Role
 resource "aws_iam_role_policy_attachment" "karpenter_worker_node_policy" {
   role       = aws_iam_role.karpenter_node_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
@@ -37,7 +37,7 @@ resource "aws_iam_role_policy_attachment" "karpenter_ssm_managed_instance_core_p
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Créer un profil d'instance pour le rôle IAM de Karpenter
+# Create Instance Profile for Karpenter Nodes
 resource "aws_iam_instance_profile" "karpenter_instance_profile" {
   name = "KarpenterNodeInstanceProfile-${local.name}"
   role = aws_iam_role.karpenter_node_role.name
@@ -53,7 +53,7 @@ module "iam_assumable_role_karpenter" {
   oidc_fully_qualified_subjects = ["system:serviceaccount:karpenter:karpenter"]
 }
 
-# Attacher les politiques nécessaires au rôle du contrôleur Karpenter
+# Attach policy to the Karpenter Controller IAM Role
 resource "aws_iam_role_policy" "karpenter_controller" {
   name = "karpenter-controller-policy"
   role = module.iam_assumable_role_karpenter.iam_role_name
