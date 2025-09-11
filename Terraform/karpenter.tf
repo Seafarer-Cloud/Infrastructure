@@ -71,7 +71,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
       name: karpenter
     spec:
       amiFamily: AL2
-      instanceProfile: "${aws_iam_instance_profile.karpenter_instance_profile.name}"
+      instanceProfile: "${module.karpenter.node_iam_role_arn}"
       subnetSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${module.eks.cluster_name}
@@ -84,9 +84,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
 
   depends_on = [
     module.eks,
-    module.karpenter,
-    aws_iam_instance_profile.karpenter_instance_profile,
-    aws_security_group.karpenter_node_sg,
+    module.karpenter
   ]
 }
 
@@ -101,9 +99,9 @@ resource "kubectl_manifest" "karpenter_node_pool" {
       template:
         spec:
           nodeClassRef:
-            apiVersion: karpenter.k8s.aws/v1beta1
+            group: karpenter.k8s.aws
             kind: EC2NodeClass
-            name: karpenter
+            name: default
           requirements:
             - key: "karpenter.sh/capacity-type"
               operator: In
