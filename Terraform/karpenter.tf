@@ -68,13 +68,14 @@ resource "helm_release" "karpenter" {
 # Karpenter Node Class
 resource "kubectl_manifest" "karpenter_node_class" {
   yaml_body = <<-YAML
-    apiVersion: karpenter.sh/v1
+    apiVersion: karpenter.k8s.aws/v1
     kind: EC2NodeClass
     metadata:
       name: karpenter
     spec:
-      amiFamily: AL2
-      instanceProfile: "${module.karpenter.node_iam_role_arn}"
+      amiSelectorTerms:
+        - alias: al2023@latest
+      role: "${module.karpenter.node_iam_role_arn}"
       subnetSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${module.eks.cluster_name}
@@ -87,7 +88,8 @@ resource "kubectl_manifest" "karpenter_node_class" {
 
   depends_on = [
     module.eks,
-    module.karpenter
+    module.karpenter,
+    helm_release.karpenter
   ]
 }
 
@@ -104,7 +106,7 @@ resource "kubectl_manifest" "karpenter_node_pool" {
           nodeClassRef:
             group: karpenter.k8s.aws
             kind: EC2NodeClass
-            name: default
+            name: karpenter
           requirements:
             - key: "karpenter.sh/capacity-type"
               operator: In

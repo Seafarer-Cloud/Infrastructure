@@ -33,7 +33,7 @@ module "eks" {
 
   addons = {
     # Enable after creation to run on Karpenter managed nodes
-    # coredns                = {}
+    coredns                = {}
     eks-pod-identity-agent = {}
     kube-proxy             = {}
     vpc-cni                = {}
@@ -43,7 +43,8 @@ module "eks" {
   fargate_profiles = {
     karpenter = {
       selectors = [
-        { namespace = "karpenter" }
+        { namespace = "karpenter" },
+        { namespace = "kube-system" }
       ]
     }
   }
