@@ -66,7 +66,6 @@ resource "aws_security_group_rule" "allow_node_to_node_communication" {
   from_port                = 0
   to_port                  = 0
   protocol                 = "-1"
-  ipv6_cidr_blocks         = []
   security_group_id        = aws_security_group.karpenter_node_sg.id
   source_security_group_id = aws_security_group.karpenter_node_sg.id
   description              = "Allow node to node communication"
