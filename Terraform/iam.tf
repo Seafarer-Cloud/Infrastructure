@@ -96,29 +96,3 @@ resource "aws_iam_role_policy" "karpenter_controller" {
     ]
   })
 }
-
-# Service Account for Karpenter with IRSA
-resource "kubernetes_service_account" "karpenter" {
-  count = data.kubernetes_service_account.existing_karpenter.metadata[0].name == "karpenter" ? 0 : 1
-
-  metadata {
-    name      = "karpenter"
-    namespace = "karpenter"
-    annotations = {
-      "eks.amazonaws.com/role-arn" = module.iam_assumable_role_karpenter.iam_role_arn
-    }
-  }
-
-  lifecycle {
-    ignore_changes = [
-      metadata[0].annotations["eks.amazonaws.com/role-arn"]
-    ]
-  }
-}
-
-data "kubernetes_service_account" "existing_karpenter" {
-  metadata {
-    name      = "karpenter"
-    namespace = "karpenter"
-  }
-}

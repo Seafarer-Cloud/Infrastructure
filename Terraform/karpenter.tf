@@ -1,52 +1,71 @@
-data "kubernetes_namespace" "karpenter" {
-  metadata {
-    name = "karpenter"
+################################################################################
+# Controller & Node IAM roles, SQS Queue, Eventbridge Rules
+################################################################################
+
+module "karpenter" {
+  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
+  version = "~> 21.0"
+
+  cluster_name = module.eks.cluster_name
+  namespace    = local.namespace
+
+  node_iam_role_additional_policies = {
+    AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
   }
+
+  node_iam_role_use_name_prefix = false
+  node_iam_role_name            = local.name
+
+  create_pod_identity_association = true
+
+  tags = local.tags
+
   depends_on = [module.eks]
 }
 
-resource "kubernetes_namespace" "karpenter" {
-  metadata {
-    name = "karpenter"
-  }
+################################################################################
+# Helm charts
+################################################################################
+
+resource "helm_release" "karpenter" {
+  name                = "karpenter"
+  namespace           = local.namespace
+  create_namespace    = true
+  repository          = "oci://public.ecr.aws/karpenter"
+  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
+  repository_password = data.aws_ecrpublic_authorization_token.token.password
+  chart               = "karpenter"
+  version             = "1.6.3"
+  wait                = false
+
+  values = [
+    <<-EOT
+    dnsPolicy: Default
+    settings:
+      clusterName: ${module.eks.cluster_name}
+      clusterEndpoint: ${module.eks.cluster_endpoint}
+      interruptionQueue: ${module.karpenter.queue_name}
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: ${module.karpenter.iam_role_arn}
+    webhook:
+      enabled: false
+    EOT
+  ]
 
   lifecycle {
-    ignore_changes = [metadata]
+    ignore_changes = [
+      repository_password
+    ]
   }
 
-  count = data.kubernetes_namespace.karpenter.metadata[0].name == "karpenter" ? 0 : 1
-
-  depends_on = [module.eks]
-}
-
-# Provider kubectl
-provider "kubectl" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  token                  = data.aws_eks_cluster_auth.cluster.token
-  load_config_file       = false
-}
-
-data "aws_eks_cluster_auth" "cluster" {
-  name = module.eks.cluster_name
-}
-
-# Data source pour EKS Cluster
-data "aws_eks_cluster" "eks" {
-  name = module.eks.cluster_name
-
-  depends_on = [module.eks]
-}
-
-# Data source pour ECR Public Authorization Token
-data "aws_ecrpublic_authorization_token" "token" {
-  provider = aws.us_east
+  depends_on = [module.karpenter]
 }
 
 # Karpenter Node Class
 resource "kubectl_manifest" "karpenter_node_class" {
   yaml_body = <<-YAML
-    apiVersion: karpenter.k8s.aws/v1beta1
+    apiVersion: karpenter.sh/v1
     kind: EC2NodeClass
     metadata:
       name: karpenter
@@ -65,6 +84,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
 
   depends_on = [
     module.eks,
+    module.karpenter,
     aws_iam_instance_profile.karpenter_instance_profile,
     aws_security_group.karpenter_node_sg,
   ]
@@ -73,7 +93,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
 # Karpenter Node Pool
 resource "kubectl_manifest" "karpenter_node_pool" {
   yaml_body = <<-YAML
-    apiVersion: karpenter.sh/v1beta1
+    apiVersion: karpenter.sh/v1
     kind: NodePool
     metadata:
       name: karpenter
@@ -97,83 +117,5 @@ resource "kubectl_manifest" "karpenter_node_pool" {
 
   depends_on = [
     kubectl_manifest.karpenter_node_class,
-  ]
-}
-
-# Helm Release pour Karpenter
-resource "helm_release" "karpenter" {
-  name                = "karpenter"
-  repository          = "oci://public.ecr.aws/karpenter"
-  chart               = "karpenter"
-  version             = "0.36.0"
-  namespace           = length(kubernetes_namespace.karpenter) > 0 ? kubernetes_namespace.karpenter[0].metadata[0].name : "karpenter"
-  create_namespace    = true
-  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
-  repository_password = data.aws_ecrpublic_authorization_token.token.password
-
-  set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.iam_assumable_role_karpenter.iam_role_arn
-  }
-
-  set {
-    name  = "settings.clusterName"
-    value = module.eks.cluster_name
-  }
-
-  set {
-    name  = "settings.clusterEndpoint"
-    value = module.eks.cluster_endpoint
-  }
-
-  set {
-    name  = "settings.defaultInstanceProfile"
-    value = aws_iam_instance_profile.karpenter_instance_profile.name
-  }
-
-  set {
-    name  = "logLevel"
-    value = "debug"
-  }
-
-  set {
-    name  = "logConfig.enabled"
-    value = "true"
-  }
-
-  set {
-    name  = "logConfig.errorOutputPaths[0]"
-    value = "stderr"
-  }
-
-  set {
-    name  = "logConfig.logEncoding"
-    value = "json"
-  }
-
-  set {
-    name  = "logConfig.logLevel.controller"
-    value = "debug"
-  }
-
-  set {
-    name  = "logConfig.logLevel.global"
-    value = "debug"
-  }
-
-  set {
-    name  = "logConfig.logLevel.webhook"
-    value = "error"
-  }
-
-  set {
-    name  = "logConfig.outputPaths[0]"
-    value = "stdout"
-  }
-
-  depends_on = [
-    module.eks,
-    module.iam_assumable_role_karpenter,
-    aws_iam_role_policy.karpenter_controller,
   ]
 }
