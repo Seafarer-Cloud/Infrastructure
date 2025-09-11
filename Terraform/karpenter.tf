@@ -59,7 +59,10 @@ resource "helm_release" "karpenter" {
     ]
   }
 
-  depends_on = [module.karpenter]
+  depends_on = [
+    module.karpenter,
+    module.eks.fargate_profiles
+  ]
 }
 
 # Karpenter Node Class

@@ -29,6 +29,8 @@ module "eks" {
   create_security_group      = false
   create_node_security_group = false
 
+  enable_cluster_creator_admin_permissions = true
+
   addons = {
     # Enable after creation to run on Karpenter managed nodes
     # coredns                = {}
