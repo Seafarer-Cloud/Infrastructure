@@ -31,9 +31,26 @@ module "eks" {
 
   enable_cluster_creator_admin_permissions = true
 
+  create_iam_role = true
+  enable_irsa     = true
+
   addons = {
     # Enable after creation to run on Karpenter managed nodes
-    coredns                = {}
+    coredns = {
+      configuration_values = jsonencode({
+        computeType = "Fargate"
+        resources = {
+          limits = {
+            cpu    = "0.25"
+            memory = "256M"
+          }
+          requests = {
+            cpu    = "0.25"
+            memory = "256M"
+          }
+        }
+      })
+    }
     eks-pod-identity-agent = {}
     kube-proxy             = {}
     vpc-cni                = {}

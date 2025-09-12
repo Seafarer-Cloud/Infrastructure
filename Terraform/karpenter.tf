@@ -16,7 +16,9 @@ module "karpenter" {
   node_iam_role_use_name_prefix = false
   node_iam_role_name            = local.name
 
-  create_pod_identity_association = true
+
+  create_pod_identity_association = false
+  create_instance_profile         = true
 
   tags = local.tags
 
@@ -38,20 +40,22 @@ resource "helm_release" "karpenter" {
   version             = "1.6.3"
   wait                = false
 
-  values = [
-    <<-EOT
-    dnsPolicy: Default
-    settings:
-      clusterName: ${module.eks.cluster_name}
-      clusterEndpoint: ${module.eks.cluster_endpoint}
-      interruptionQueue: ${module.karpenter.queue_name}
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: ${module.karpenter.iam_role_arn}
-    webhook:
-      enabled: false
-    EOT
-  ]
+  set = [{
+    name  = "settings.clusterName"
+    value = module.eks.cluster_name
+    }, {
+    name  = "settings.clusterEndpoint"
+    value = module.eks.cluster_endpoint
+    }, {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = module.karpenter.iam_role_arn
+    }, {
+    name  = "settings.aws.defaultInstanceProfile"
+    value = module.karpenter.instance_profile_name
+    }, {
+    name  = "settings.aws.interruptionQueueName"
+    value = module.karpenter.queue_name
+  }]
 
   lifecycle {
     ignore_changes = [
@@ -114,6 +118,9 @@ resource "kubectl_manifest" "karpenter_node_pool" {
             - key: kubernetes.io/os
               operator: In
               values: ["linux"]
+            - key: "karpenter.k8s.aws/instance-hypervisor"
+              operator: In
+              values: ["nitro"]
       ttlSecondsAfterEmpty: 30
       ttlSecondsUntilExpired: 2592000
   YAML
