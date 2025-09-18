@@ -1,7 +1,17 @@
+resource "kubernetes_namespace" "aws_observability" {
+  metadata {
+    name = "aws-observability"
+  }
+
+  depends_on = [
+    module.eks
+  ]
+}
+
 resource "kubernetes_config_map" "aws_logging" {
   metadata {
     name      = "aws-logging"
-    namespace = "aws-observability"
+    namespace = kubernetes_namespace.aws_observability.metadata[0].name
   }
 
   data = {
@@ -35,5 +45,6 @@ EOF
 
   depends_on = [
     module.eks,
+    kubernetes_namespace.aws_observability
   ]
 }

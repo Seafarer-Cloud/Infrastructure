@@ -16,13 +16,44 @@ module "karpenter" {
   node_iam_role_use_name_prefix = false
   node_iam_role_name            = local.name
 
-
+  # Use IRSA instead of Pod Identity
   create_pod_identity_association = false
   create_instance_profile         = true
+
+  # Force recreation of IAM role with correct trust policy for IRSA
+  iam_role_use_name_prefix = false
 
   tags = local.tags
 
   depends_on = [module.eks]
+}
+
+# Override the controller role trust policy to use IRSA instead of Pod Identity
+resource "aws_iam_role" "karpenter_controller_irsa" {
+  name = "KarpenterController"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:sub" = "system:serviceaccount:karpenter:karpenter"
+            "${replace(module.eks.cluster_oidc_issuer_url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = local.tags
+
+  depends_on = [module.karpenter]
 }
 
 ################################################################################
@@ -86,6 +117,10 @@ resource "kubectl_manifest" "karpenter_node_class" {
       securityGroupSelectorTerms:
         - tags:
             karpenter.sh/discovery: ${module.eks.cluster_name}
+      # userData: |
+      #   #!/bin/bash
+      #   dnf install -y amazon-eks-node
+      #   /usr/bin/nodeadm init --cluster-name ${module.eks.cluster_name}
       tags:
         karpenter.sh/discovery: ${module.eks.cluster_name}
   YAML
