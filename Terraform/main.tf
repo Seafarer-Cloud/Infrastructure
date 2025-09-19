@@ -22,52 +22,16 @@ module "eks" {
   kubernetes_version     = "1.33"
   endpoint_public_access = true
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
-
-  # Disabled for Fargate and Karpenter
-  create_security_group      = false
-  create_node_security_group = false
+  vpc_id                  = module.vpc.vpc_id
+  subnet_ids              = module.vpc.private_subnets
+  endpoint_private_access = false
 
   enable_cluster_creator_admin_permissions = true
 
-  create_iam_role = true
-  enable_irsa     = true
-
-  addons = {
-    # Enable after creation to run on Karpenter managed nodes
-    coredns = {
-      configuration_values = jsonencode({
-        computeType = "Fargate"
-        resources = {
-          limits = {
-            cpu    = "0.25"
-            memory = "256M"
-          }
-          requests = {
-            cpu    = "0.25"
-            memory = "256M"
-          }
-        }
-      })
-    }
-    eks-pod-identity-agent = {}
-    kube-proxy             = {}
-    vpc-cni                = {}
+  compute_config = {
+    enabled    = true
+    node_pools = ["general-purpose"]
   }
 
-
-  fargate_profiles = {
-    karpenter = {
-      selectors = [
-        { namespace = "karpenter" },
-        { namespace = "kube-system" }
-      ]
-    }
-  }
-
-  tags = merge(local.tags, {
-    "karpenter.sh/discovery" = local.name
-  })
+  tags = local.tags
 }
-
