@@ -4,10 +4,6 @@ module "karpenter" {
 
   cluster_name = module.eks.cluster_name
 
-
-
-
-
   # Name needs to match role name passed to the EC2NodeClass
   node_iam_role_use_name_prefix = false
   node_iam_role_name            = "${local.name}-karpenter-node"
@@ -56,8 +52,7 @@ resource "kubectl_manifest" "karpenter_node_class" {
     spec:
       amiFamily: AL2023
       amiSelectorTerms:
-        - tags:
-            karpenter.sh/discovery: ${module.eks.cluster_name}
+        - alias: al2023@latest
       role: ${module.karpenter.node_iam_role_name}
       subnetSelectorTerms:
         - tags:
@@ -94,6 +89,9 @@ resource "kubectl_manifest" "karpenter_node_pool" {
             - key: "karpenter.k8s.aws/instance-generation"
               operator: Gt
               values: ["2"]
+            - key: "karpenter.k8s.aws/instance-size"
+              operator: NotIn
+              values: ["nano", "micro"]
       limits:
         cpu: 1000
       disruption:

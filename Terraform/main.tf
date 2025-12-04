@@ -19,7 +19,7 @@ module "eks" {
   version = "~> 21.0"
 
   name                   = local.name
-  kubernetes_version     = "1.33"
+  kubernetes_version     = "1.31"
   endpoint_public_access = true
 
   vpc_id                  = module.vpc.vpc_id
@@ -61,20 +61,34 @@ module "eks" {
     vpc-cni = {
       most_recent = true
     }
+    aws-ebs-csi-driver = {
+      most_recent              = true
+      service_account_role_arn = module.ebs_csi_irsa_role.arn
+    }
   }
 
-  fargate_profiles = {
-    karpenter = {
-      selectors = [
-        { namespace = "karpenter" }
-      ]
-    }
-    kube-system = {
-      selectors = [
-        { namespace = "kube-system" }
-      ]
+  eks_managed_node_groups = {
+    system = {
+      name           = "system-node-group"
+      instance_types = ["t3.small"]
+      min_size       = 1
+      max_size       = 2
+      desired_size   = 2
+
+      taints = {
+        # This taint tells kubernetes that this node is only for system components
+        # We don't want to schedule user workloads on it
+        # But we don't strictly enforce it with "NoSchedule" to allow some flexibility if needed
+        # actually for system components we usually don't taint, or we use CriticalAddonsOnly
+        # Let's keep it simple for now and just rely on node selector/affinity if needed, 
+        # or just let them run here. 
+        # Actually, to ensure only system components run here, we could taint. 
+        # But for now, let's just create the node group.
+      }
     }
   }
+
+
 
   tags = local.tags
 }

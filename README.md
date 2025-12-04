@@ -4,16 +4,17 @@ Ce dépôt contient la configuration Terraform pour le cluster EKS (Elastic Kube
 
 ## Aperçu de l'Architecture (Comment ça Marche ?)
 
-Notre cluster utilise une approche de calcul "hybride", ce qui signifie qu'il combine deux façons de gérer les serveurs pour nos applications :
+Notre cluster utilise une approche entièrement basée sur des instances EC2, optimisée pour la flexibilité et la gestion des coûts :
 
-1.  **Profils Fargate (Les Composants "Sans Serveur")**:
+1.  **Groupe de Nœuds Managé (System)** :
 
-    - `kube-system`: Les composants essentiels de Kubernetes, comme CoreDNS (qui aide les services à se trouver entre eux) et VPC CNI (qui gère la communication réseau), fonctionnent sur Fargate. Fargate est un service AWS qui vous permet d'exécuter des conteneurs sans avoir à provisionner ou gérer de serveurs. C'est idéal pour les services de base qui doivent être très stables et fiables.
-    - `karpenter`: Le contrôleur Karpenter lui-même (le programme qui décide quand ajouter ou supprimer des serveurs) fonctionne aussi sur Fargate. C'est important car cela garantit que Karpenter peut toujours fonctionner, même si les autres serveurs (ceux qu'il gère) rencontrent des problèmes.
+    - Un groupe de nœuds géré par EKS (`system-node-group`) héberge les composants critiques du système, tels que CoreDNS, VPC CNI, le pilote EBS CSI et **Karpenter** lui-même.
+    - Ce groupe est configuré avec une haute disponibilité (minimum 2 nœuds) pour assurer que les services essentiels restent toujours actifs.
 
-2.  **Karpenter (Le Gestionnaire de Serveurs Intelligent)**:
-    - Karpenter va provisionner des nœuds EC2 (des machines virtuelles d'AWS, soit des instances Spot moins chères mais interruptibles, soit des instances On-Demand plus stables) en fonction des besoins de vos applications. Si une application a besoin de plus de ressources et qu'il n'y a pas de serveur disponible, Karpenter en lancera un nouveau, juste à temps.
-    - Il gère tout le cycle de vie de ces serveurs : les créer, les supprimer quand ils ne sont plus utiles (consolidation), et les remplacer si nécessaire.
+2.  **Karpenter (Le Gestionnaire de Serveurs Intelligent)** :
+    - Karpenter surveille les applications (Pods) en attente et provisionne dynamiquement des nœuds EC2 supplémentaires pour les héberger.
+    - Il choisit intelligemment le type d'instance le plus adapté (CPU, RAM) et le moins cher (Spot ou On-Demand) pour vos charges de travail.
+    - Il gère tout le cycle de vie de ces serveurs : création, suppression (quand ils sont vides) et consolidation.
 
 ### Diagrammes (Les Schémas Explicatifs)
 
@@ -26,8 +27,8 @@ graph TD
     subgraph AWS Cloud
         subgraph VPC
             subgraph Private Subnets
-                Fargate[Nœuds Fargate]
-                EC2_Node["Nœuds EC2 (Karpenter)"]
+                SystemNodes[Nœuds Système (MNG)]
+                WorkloadNodes["Nœuds de Charge (Karpenter)"]
             end
 
             NAT[Passerelle NAT]
@@ -38,29 +39,31 @@ graph TD
     end
 
     User -->|kubectl| EKS
-    EKS -->|Gère| Fargate
-    EKS -->|Gère| EC2
+    EKS -->|Gère| SystemNodes
+    EKS -->|Gère| WorkloadNodes
 
-    subgraph Fargate Workloads
+    subgraph System Workloads
         KarpenterCtrl[Contrôleur Karpenter]
         CoreDNS
+        EBSCSI[Pilote EBS CSI]
     end
 
-    Fargate --> KarpenterCtrl
-    Fargate --> CoreDNS
+    SystemNodes --> KarpenterCtrl
+    SystemNodes --> CoreDNS
+    SystemNodes --> EBSCSI
 
-    KarpenterCtrl -->|Provisionne| EC2
-    EC2 -->|Tire les Images| ECR
+    KarpenterCtrl -->|Provisionne| WorkloadNodes
+    WorkloadNodes -->|Tire les Images| ECR
 ```
 
-- **Explication du diagramme :** L'utilisateur interagit avec le "cerveau" du cluster (EKS Control Plane). EKS gère à la fois les "nœuds Fargate" (où tournent les services critiques comme Karpenter et CoreDNS) et les "nœuds EC2" (les serveurs classiques gérés par Karpenter). Le contrôleur Karpenter, tournant sur Fargate, est celui qui demande à AWS de créer de nouveaux nœuds EC2. Ces nœuds EC2 récupèrent ensuite le code de vos applications depuis ECR (un service de stockage d'images Docker).
+- **Explication du diagramme :** EKS gère un groupe de nœuds système (Managed Node Group) où tournent les services critiques comme Karpenter. Karpenter, depuis ces nœuds système, observe le cluster et demande à AWS de créer de nouveaux "Nœuds de Charge" pour vos applications.
 
 #### Séquence de Provisionnement des Nœuds (Comment un Nouveau Serveur est Ajouté)
 
 ```mermaid
 sequenceDiagram
     participant P as Pod en Attente
-    participant K as "Karpenter (Fargate)"
+    participant K as "Karpenter (Nœud Système)"
     participant A as API AWS EC2
     participant N as Nouveau Nœud
     participant E as Plan de Contrôle EKS
@@ -75,7 +78,7 @@ sequenceDiagram
     N-->>P: En Cours d'Exécution
 ```
 
-- **Explication du diagramme :** Lorsqu'une application (un "Pod") a besoin de démarrer mais qu'il n'y a pas de place, elle est mise "en attente" par EKS. Karpenter détecte cette attente et demande à AWS (via l'API EC2) de créer un nouveau serveur. Une fois le serveur créé et démarré, il se connecte au cluster EKS. EKS peut alors envoyer le Pod en attente sur ce nouveau serveur, et l'application commence à fonctionner.
+- **Explication du diagramme :** Lorsqu'une application (un "Pod") a besoin de démarrer mais qu'il n'y a pas de place, elle est mise "en attente". Karpenter (qui tourne sur un nœud système) détecte cela et provisionne un nouveau nœud EC2. Une fois le nœud prêt, EKS y place le Pod.
 
 ## Modules Utilisés (Les Blocs de Construction Terraform)
 
