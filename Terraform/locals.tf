@@ -8,7 +8,8 @@ locals {
   namespace = "karpenter"
 
   tags = {
-    Blueprint = local.name
+    Blueprint                = local.name
+    "karpenter.sh/discovery" = local.name
   }
 
   karpenter_version = "1.0.0" # Example version, will use latest helm chart

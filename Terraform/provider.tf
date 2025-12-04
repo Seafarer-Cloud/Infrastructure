@@ -28,6 +28,8 @@ provider "kubernetes" {
   }
 }
 
+
+
 provider "helm" {
   kubernetes = {
     host                   = module.eks.cluster_endpoint
@@ -38,6 +40,7 @@ provider "helm" {
       command     = "aws"
     }
   }
+
 
 }
 provider "aws" {

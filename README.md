@@ -1,125 +1,145 @@
-# Seafarer Cloud Infrastructure - EKS Fargate & Karpenter
+# Infrastructure Cloud Seafarer - EKS Fargate & Karpenter (Explication Simple)
 
-This repository contains the Terraform configuration for the Seafarer Cloud EKS cluster. The infrastructure is designed to be serverless-first, utilizing **AWS Fargate** for the control plane and system components, and **Karpenter** for dynamic, just-in-time provisioning of EC2 worker nodes.
+Ce dépôt contient la configuration Terraform pour le cluster EKS (Elastic Kubernetes Service) de Seafarer Cloud. En termes simples, c'est comme un plan de construction pour notre "centre de données virtuel" sur AWS. L'infrastructure est conçue pour être "serverless-first", ce qui signifie que nous essayons de ne pas nous soucier directement des serveurs. Pour cela, elle utilise **AWS Fargate** pour les parties principales de Kubernetes (le "cerveau" du cluster) et **Karpenter** pour ajouter automatiquement des serveurs (appelés "nœuds de travail EC2") au fur et à mesure que nos applications en ont besoin, et ce, juste à temps.
 
-## Architecture Overview
+## Aperçu de l'Architecture (Comment ça Marche ?)
 
-The cluster uses a hybrid compute approach:
+Notre cluster utilise une approche de calcul "hybride", ce qui signifie qu'il combine deux façons de gérer les serveurs pour nos applications :
 
-1. **Fargate Profiles**:
-   - `kube-system`: Core Kubernetes components (CoreDNS, VPC CNI, etc.) run on Fargate.
-   - `karpenter`: The Karpenter controller runs on Fargate to ensure it is independent of the nodes it manages.
-2. **Karpenter**:
-   - Provisions EC2 nodes (Spot or On-Demand) based on pending pod requirements.
-   - Manages the lifecycle of nodes (provisioning, disruption, consolidation).
+1.  **Profils Fargate (Les Composants "Sans Serveur")**:
 
-### Diagrams
+    - `kube-system`: Les composants essentiels de Kubernetes, comme CoreDNS (qui aide les services à se trouver entre eux) et VPC CNI (qui gère la communication réseau), fonctionnent sur Fargate. Fargate est un service AWS qui vous permet d'exécuter des conteneurs sans avoir à provisionner ou gérer de serveurs. C'est idéal pour les services de base qui doivent être très stables et fiables.
+    - `karpenter`: Le contrôleur Karpenter lui-même (le programme qui décide quand ajouter ou supprimer des serveurs) fonctionne aussi sur Fargate. C'est important car cela garantit que Karpenter peut toujours fonctionner, même si les autres serveurs (ceux qu'il gère) rencontrent des problèmes.
 
-#### Component Flow
+2.  **Karpenter (Le Gestionnaire de Serveurs Intelligent)**:
+    - Karpenter va provisionner des nœuds EC2 (des machines virtuelles d'AWS, soit des instances Spot moins chères mais interruptibles, soit des instances On-Demand plus stables) en fonction des besoins de vos applications. Si une application a besoin de plus de ressources et qu'il n'y a pas de serveur disponible, Karpenter en lancera un nouveau, juste à temps.
+    - Il gère tout le cycle de vie de ces serveurs : les créer, les supprimer quand ils ne sont plus utiles (consolidation), et les remplacer si nécessaire.
+
+### Diagrammes (Les Schémas Explicatifs)
+
+Ces diagrammes vous aident à visualiser comment les différents composants interagissent.
+
+#### Flux des Composants
 
 ```mermaid
 graph TD
     subgraph AWS Cloud
         subgraph VPC
             subgraph Private Subnets
-                Fargate[Fargate Nodes]
-                EC2[Karpenter EC2 Nodes]
+                Fargate[Nœuds Fargate]
+                EC2_Node["Nœuds EC2 (Karpenter)"]
             end
 
-            NAT[NAT Gateway]
+            NAT[Passerelle NAT]
         end
 
-        EKS[EKS Control Plane]
+        EKS[Plan de Contrôle EKS]
         ECR[Amazon ECR]
     end
 
     User -->|kubectl| EKS
-    EKS -->|Manages| Fargate
-    EKS -->|Manages| EC2
+    EKS -->|Gère| Fargate
+    EKS -->|Gère| EC2
 
     subgraph Fargate Workloads
-        KarpenterCtrl[Karpenter Controller]
+        KarpenterCtrl[Contrôleur Karpenter]
         CoreDNS
     end
 
     Fargate --> KarpenterCtrl
     Fargate --> CoreDNS
 
-    KarpenterCtrl -->|Provisions| EC2
-    EC2 -->|Pulls Images| ECR
+    KarpenterCtrl -->|Provisionne| EC2
+    EC2 -->|Tire les Images| ECR
 ```
 
-#### Node Provisioning Sequence
+- **Explication du diagramme :** L'utilisateur interagit avec le "cerveau" du cluster (EKS Control Plane). EKS gère à la fois les "nœuds Fargate" (où tournent les services critiques comme Karpenter et CoreDNS) et les "nœuds EC2" (les serveurs classiques gérés par Karpenter). Le contrôleur Karpenter, tournant sur Fargate, est celui qui demande à AWS de créer de nouveaux nœuds EC2. Ces nœuds EC2 récupèrent ensuite le code de vos applications depuis ECR (un service de stockage d'images Docker).
+
+#### Séquence de Provisionnement des Nœuds (Comment un Nouveau Serveur est Ajouté)
 
 ```mermaid
 sequenceDiagram
-    participant P as Pending Pod
-    participant K as Karpenter (Fargate)
-    participant A as AWS EC2 API
-    participant N as New Node
-    participant E as EKS Control Plane
+    participant P as Pod en Attente
+    participant K as "Karpenter (Fargate)"
+    participant A as API AWS EC2
+    participant N as Nouveau Nœud
+    participant E as Plan de Contrôle EKS
 
-    P->>E: Scheduled (Pending)
-    K->>E: Watch for Pending Pods
+    P->>E: Planifié (En Attente)
+    K->>E: Surveille les Pods en Attente
     K->>A: CreateFleet (EC2NodeClass)
-    A-->>K: Instance Created
-    A->>N: Boot & Join Cluster
-    N->>E: Node Ready
-    E->>N: Schedule Pod
-    N-->>P: Running
+    A-->>K: Instance Créée
+    A->>N: Démarrage & Jonction au Cluster
+    N->>E: Nœud Prêt
+    E->>N: Planifie le Pod
+    N-->>P: En Cours d'Exécution
 ```
 
-## Modules Used
+- **Explication du diagramme :** Lorsqu'une application (un "Pod") a besoin de démarrer mais qu'il n'y a pas de place, elle est mise "en attente" par EKS. Karpenter détecte cette attente et demande à AWS (via l'API EC2) de créer un nouveau serveur. Une fois le serveur créé et démarré, il se connecte au cluster EKS. EKS peut alors envoyer le Pod en attente sur ce nouveau serveur, et l'application commence à fonctionner.
 
-- **EKS**: `terraform-aws-modules/eks/aws` (v21.0+)
-- **VPC**: `terraform-aws-modules/vpc/aws`
-- **Karpenter**: `terraform-aws-modules/eks/aws//modules/karpenter`
+## Modules Utilisés (Les Blocs de Construction Terraform)
 
-## Prerequisites
+Nous utilisons des modules Terraform pré-existants pour simplifier la configuration de notre infrastructure :
 
-- Terraform >= 1.0
-- AWS CLI
-- kubectl
-- helm
+- **EKS**: `terraform-aws-modules/eks/aws` (v21.0+) - Ce module nous aide à configurer facilement le cluster EKS lui-même, qui est le cœur de notre système Kubernetes sur AWS.
+- **VPC**: `terraform-aws-modules/vpc/aws` - Ce module configure notre "réseau virtuel" privé (VPC) sur AWS, en créant les sous-réseaux, les tables de routage, etc., pour que nos serveurs puissent communiquer de manière sécurisée.
+- **Karpenter**: `terraform-aws-modules/eks/aws//modules/karpenter` - Ce module spécifique à Karpenter nous permet d'intégrer et de configurer facilement Karpenter dans notre cluster EKS existant.
 
-## Deployment
+## Prérequis (Ce Dont Vous Avez Besoin Avant de Commencer)
 
-1. **Initialize Terraform**:
+Avant de pouvoir déployer cette infrastructure, assurez-vous d'avoir installé les outils suivants sur votre machine :
 
-   ```bash
-   terraform init
-   ```
+- **Terraform >= 1.0**: C'est l'outil qui nous permet de décrire et de déployer notre infrastructure sous forme de code.
+- **AWS CLI**: L'interface en ligne de commande d'AWS, nécessaire pour interagir avec les services Amazon depuis votre terminal.
+- **kubectl**: L'outil en ligne de commande standard pour interagir avec les clusters Kubernetes.
+- **helm**: Un gestionnaire de paquets pour Kubernetes, utilisé pour déployer des applications pré-configurées.
 
-2. **Plan Changes**:
+## Déploiement (Comment Lancer l'Infrastructure)
 
-   ```bash
-   terraform plan
-   ```
+Suivez ces étapes pour déployer l'infrastructure sur AWS :
 
-3. **Apply Changes**:
+1.  **Initialiser Terraform**:
 
-   ```bash
-   terraform apply
-   ```
+    ```bash
+    terraform init
+    ```
 
-4. **Configure kubectl**:
+    Cette commande prépare votre répertoire Terraform en téléchargeant les plugins et modules nécessaires. C'est la première chose à faire quand vous commencez ou mettez à jour votre configuration Terraform.
 
-   ```bash
-   aws eks update-kubeconfig --name Seafarer-cluster --region eu-west-3
-   ```
+2.  **Planifier les Changements**:
 
-## Karpenter Configuration
+    ```bash
+    terraform plan
+    ```
 
-Karpenter is configured with a default `NodePool` and `EC2NodeClass`.
+    Cette commande vous montre exactement ce que Terraform va faire (quels services AWS seront créés, modifiés ou supprimés) _avant_ de les appliquer. C'est une étape cruciale pour vérifier que tout est conforme à vos attentes.
 
-- **NodePool**: `default`
+3.  **Appliquer les Changements**:
 
-  - Instance Families: Flexible (all Nitro-based families)
-  - CPU: Flexible (any size that fits the pod)
-  - Hypervisor: Nitro
-  - Capacity Type: Spot & On-Demand (default behavior)
-  - Consolidation: Enabled (WhenEmpty)
+    ```bash
+    terraform apply
+    ```
 
-- **EC2NodeClass**: `default`
-  - AMI Family: AL2023 (Amazon Linux 2023)
-  - Discovery Tags: `karpenter.sh/discovery: Seafarer-cluster`
+    C'est la commande qui va réellement créer ou modifier les ressources sur AWS, en se basant sur le plan que vous avez validé. Tapez `yes` lorsque Terraform vous le demande pour confirmer.
+
+4.  **Configurer kubectl**:
+    ```bash
+    aws eks update-kubeconfig --name Seafarer-cluster --region eu-west-3
+    ```
+    Après le déploiement du cluster EKS, cette commande met à jour votre fichier de configuration `kubectl` (généralement situé dans `~/.kube/config`). Cela permet à `kubectl` de savoir comment se connecter à votre nouveau cluster EKS et de commencer à interagir avec lui. Remplacez `eu-west-3` par la région AWS où vous avez déployé le cluster si elle est différente.
+
+## Configuration de Karpenter (Comment Karpenter Prend Ses Décisions)
+
+Karpenter est configuré avec un `NodePool` (un groupe de nœuds) et un `EC2NodeClass` (une classe de nœuds EC2) par défaut. Ces configurations dictent quel type de serveurs Karpenter peut créer et comment il doit les gérer.
+
+- **NodePool**: `default` (Le "Panier" de Nœuds par Défaut)
+
+  - Instance Families (Familles d'instances) : `Flexible` (toutes les familles basées sur Nitro) - Cela signifie que Karpenter peut choisir parmi une large gamme de types de serveurs basés sur la plateforme Nitro d'AWS, ce qui offre une grande flexibilité et souvent de meilleures performances.
+  - CPU : `Flexible` (toute taille qui correspond au pod) - Karpenter est intelligent et peut choisir un serveur avec la bonne quantité de CPU pour faire tourner l'application en attente, évitant ainsi le gaspillage de ressources.
+  - Hypervisor (Hyperviseur) : `Nitro` - Spécifie que les serveurs doivent utiliser l'hyperviseur Nitro d'AWS, connu pour sa sécurité et ses performances.
+  - Capacity Type (Type de Capacité) : `Spot` & `On-Demand` (comportement par défaut) - Karpenter essaiera d'abord d'utiliser des instances Spot (moins chères mais qui peuvent être interrompues par AWS) et basculera vers des instances On-Demand (plus chères mais garanties) si les instances Spot ne sont pas disponibles ou ne sont pas adaptées.
+  - Consolidation : `Enabled (WhenEmpty)` - Cette fonctionnalité permet à Karpenter de "nettoyer" le cluster. Si un serveur devient vide (plus aucune application ne tourne dessus), Karpenter le supprimera pour économiser des coûts, ou tentera de regrouper les applications restantes sur moins de serveurs pour optimiser l'utilisation.
+
+- **EC2NodeClass**: `default` (La "Recette" pour les Nœuds EC2)
+  - AMI Family (Famille d'AMI) : `AL2023` (Amazon Linux 2023) - Spécifie le système d'exploitation de base qui sera installé sur les nouveaux serveurs. Ici, c'est la dernière version d'Amazon Linux, optimisée pour AWS.
+  - Discovery Tags (Tags de Découverte) : `karpenter.sh/discovery: Seafarer-cluster` - C'est une étiquette spéciale que Karpenter ajoute aux serveurs qu'il provisionne. Elle permet aux différents composants (Karpenter, EKS) de facilement identifier et gérer les serveurs qui appartiennent à ce cluster `Seafarer-cluster`.

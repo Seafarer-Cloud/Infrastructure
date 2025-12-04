@@ -6,9 +6,15 @@ module "karpenter" {
 
 
 
+
+
   # Name needs to match role name passed to the EC2NodeClass
   node_iam_role_use_name_prefix = false
   node_iam_role_name            = "${local.name}-karpenter-node"
+
+  # Use IRSA instead of Pod Identity
+  create_pod_identity_association         = false
+  iam_role_source_assume_policy_documents = [data.aws_iam_policy_document.karpenter_controller_assume_role.json]
 
   node_iam_role_additional_policies = {
     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
@@ -18,13 +24,15 @@ module "karpenter" {
 }
 
 resource "helm_release" "karpenter" {
-  namespace        = "karpenter"
-  create_namespace = true
-  name             = "karpenter"
-  repository       = "oci://public.ecr.aws/karpenter"
-  chart            = "karpenter"
-  version          = local.karpenter_version
-  wait             = false
+  namespace           = "karpenter"
+  create_namespace    = true
+  name                = "karpenter"
+  repository          = "oci://public.ecr.aws/karpenter"
+  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
+  repository_password = data.aws_ecrpublic_authorization_token.token.password
+  chart               = "karpenter"
+  version             = local.karpenter_version
+  wait                = false
 
   values = [
     <<-EOT
@@ -47,6 +55,9 @@ resource "kubectl_manifest" "karpenter_node_class" {
       name: default
     spec:
       amiFamily: AL2023
+      amiSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${module.eks.cluster_name}
       role: ${module.karpenter.node_iam_role_name}
       subnetSelectorTerms:
         - tags:
