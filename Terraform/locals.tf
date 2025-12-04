@@ -10,4 +10,6 @@ locals {
   tags = {
     Blueprint = local.name
   }
+
+  karpenter_version = "1.0.0" # Example version, will use latest helm chart
 }

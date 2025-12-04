@@ -26,11 +26,55 @@ module "eks" {
   subnet_ids              = module.vpc.private_subnets
   endpoint_private_access = false
 
-  enable_cluster_creator_admin_permissions = true
+  enable_irsa = true
 
-  compute_config = {
-    enabled    = true
-    node_pools = ["general-purpose", "system"]
+
+
+  addons = {
+    coredns = {
+      most_recent = true
+
+      timeouts = {
+        create = "25m"
+        delete = "10m"
+      }
+
+      configuration_values = jsonencode({
+        computeType = "Fargate"
+        # Ensure that the we have a replica that is not on the same node
+        # to avoid single point of failure
+        replicaCount = 2
+        resources = {
+          limits = {
+            cpu    = "0.25"
+            memory = "256M"
+          }
+          requests = {
+            cpu    = "0.25"
+            memory = "256M"
+          }
+        }
+      })
+    }
+    kube-proxy = {
+      most_recent = true
+    }
+    vpc-cni = {
+      most_recent = true
+    }
+  }
+
+  fargate_profiles = {
+    karpenter = {
+      selectors = [
+        { namespace = "karpenter" }
+      ]
+    }
+    kube-system = {
+      selectors = [
+        { namespace = "kube-system" }
+      ]
+    }
   }
 
   tags = local.tags
